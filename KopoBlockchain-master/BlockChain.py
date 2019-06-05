@@ -15,19 +15,15 @@ import pandas as pd
 import pymysql
 from sqlalchemy import create_engine
 
-engine = create_engine('mysql+pymysql://kopo:kopo@192.168.110.111:3306/kopo')
+engine = create_engine('mysql+pymysql://root:root@127.0.0.1:3306/test')
 PORT_NUMBER = 8099
 g_txTableName = 'txdata'
 g_bcTableName = 'blockchain'
 g_nodelistTableName = 'nodelist'
-g_txFileName = "txData.csv"
-g_bcFileName = "blockchain.csv"
-g_nodelstFileName = "nodelst.csv"
 g_receiveNewBlock = "/node/receiveNewBlock"
 g_difficulty = 2
 g_maximumTry = 100
 g_nodeList = {'trustedServerAddress': '8099'}  # trusted server list, should be checked manually
-
 
 class Block:
 
@@ -41,9 +37,8 @@ class Block:
         self.fee = fee
         self.signature = signature
 
-    def toJSON(self):
+    def toJSON(self): # 20190605 Hyun Gong Block to json
         return json.dumps(self, default=lambda o: o.__dict__, sort_keys=True, indent=4)
-
 
 class txData:
 
@@ -57,6 +52,8 @@ class txData:
         self.message = message
         self.txTime = txTime
 
+# 20190604 Hyun Gong automatic timer
+# Block mining every 10 minutes using threading
 def execute_func(second=1.0):
     end = False
     if end:
@@ -64,11 +61,11 @@ def execute_func(second=1.0):
     mineNewBlock()
     threading.Timer(second, execute_func, [second]).start()
 
+# 20190604 Hyun Gong mysql_Query
 def selectTable(tableName):
     table = pd.read_sql_query('select * from {}'.format(tableName), engine)
     table.rename(columns=lambda x: x.lower(), inplace=True)
     return table
-
 
 def insertBlockchain(block):
     try:
@@ -82,13 +79,11 @@ def insertTxdata(tx):
     except:
         pass
 
-
 def insertNodelist(ip, port):
     try:
         pd.read_sql_query("insert into nodelist (ip, port, trial) values ('{}', '{}', 0)".format(ip, port), engine)
     except:
         pass
-
 
 def generateGenesisBlock():
     print("generateGenesisBlock is called")
@@ -98,12 +93,13 @@ def generateGenesisBlock():
     print(tempHash)
     return Block(0, '0', timestamp, "Genesis Block", tempHash, 0, 0, 'Genesis')
 
-
 def calculateHash(index, previousHash, timestamp, data, proof, fee, signature):
     value = str(index) + str(previousHash) + str(timestamp) + str(data) + str(proof) + str(fee) + str(signature)
     sha = hashlib.sha256(value.encode('utf-8'))
     return str(sha.hexdigest())
 
+# 20190604 Hyun Gong txData message hash
+# Hash message content using sha256
 def messageHash():
     temp = ''
     importedTx = readTx(g_txTableName).reset_index(drop=True)
@@ -117,11 +113,9 @@ def calculateHashForBlock(block):
     return calculateHash(block.index, block.previousHash, block.timestamp, block.data, block.proof, block.fee,
                          block.signature)
 
-
 def getLatestBlock(blockchain):
     latestBlock = Block(blockchain.no[len(blockchain) - 1], blockchain.previoushash[len(blockchain) - 1], blockchain.timestamp[len(blockchain) - 1], blockchain.data[len(blockchain) - 1], blockchain.currenthash[len(blockchain) - 1], blockchain.proof[len(blockchain) - 1], blockchain.fee[len(blockchain) - 1], blockchain.signature[len(blockchain) - 1])
     return latestBlock
-
 
 def generateNextBlock(blockchain, blockData, timestamp, proof, fee, signature):
     previousBlock = getLatestBlock(blockchain)
@@ -131,10 +125,9 @@ def generateNextBlock(blockchain, blockData, timestamp, proof, fee, signature):
 
     return Block(nextIndex, previousBlock.currentHash, nextTimestamp, blockData, nextHash, proof, fee, signature)
 
-
 def writeBlockchain(blockchain):
 
-    # [STARAT] check current db(csv) if broadcasted block data has already been updated
+    # [STARAT] check current DB if broadcasted block data has already been updated
     lastBlock = None
     try:
         blockReader = selectTable(g_bcTableName)
@@ -150,18 +143,18 @@ def writeBlockchain(blockchain):
         print("file open error in check current db(csv) \n or maybe there's some other reason")
         pass
         # return
-    # [END] check current db(csv)
+    # [END] check current DB
 
     newBlock = Block(blockchain.no[len(blockchain) - 1], blockchain.previoushash[len(blockchain) - 1], blockchain.timestamp[len(blockchain) - 1], blockchain.data[len(blockchain) - 1],
                      blockchain.currenthash[len(blockchain) - 1], blockchain.proof[len(blockchain) - 1], blockchain.fee[len(blockchain) - 1], blockchain.signature[len(blockchain) - 1])
 
+    # 20190604 Hyun Gong newBlock insert_query
     insertBlockchain(newBlock)
     updateTx(newBlock)
-
     print('Blockchain written to db.')
+
     # print('Broadcasting new block to other nodes')
     # broadcastNewBlock(blockchain)
-
 
 def readBlockchain(g_bcTableName, mode='internal'):
     print("readBlockchain")
@@ -191,16 +184,18 @@ def readPagingBlockchain(g_bcTableName, start, end, mode='internal'):
     if start > end:
         return 0
     try:
+        # 20190604 Hyun Gong paging blockdata
         importedBlockchain = selectTable(g_bcTableName)
         if start > len(importedBlockchain) or start < 1:
             return 0
         else:
-            if end > len(importedBlockchain):
-                end = len(importedBlockchain)
-
-            importedBlockchain = importedBlockchain.iloc[start - 1:end, :]
-            print("Pulling blockchain from db...")
-            return importedBlockchain
+            # 20190604 Hyun Gong limitation check : max 100 blockchain
+            if end - start < 100:
+                importedBlockchain = importedBlockchain.iloc[start - 1:end, :]
+                print("Pulling blockchain from db...")
+                return importedBlockchain
+            else:
+                return 0
 
     except:
         if mode == 'internal':
@@ -213,7 +208,6 @@ def readPagingBlockchain(g_bcTableName, start, end, mode='internal'):
             return importedBlockchain
         else:
             return 0
-
 
 def updateTx(blockData):
     phrase = re.compile(
@@ -229,21 +223,22 @@ def updateTx(blockData):
         if reader.uuid[i] in matchList:
             print('updating row : ', reader.uuid[i])
             try:
+                # 20190604 Hyun Gong txData commintYN update_query
                 pd.read_sql_query("update txdata set commityn = 1 where uuid = '{}'".format(reader.uuid[i]), engine)
             except:
                 pass
 
-
     print('txData updated')
-
 
 def writeTx(txRawData):
     print(g_txTableName)
     count = 0
+    # 20190604 Hyun Gong txData insert_query
     try:
         for i in txRawData:
             insertTxdata(i)
             count += 1
+    # 20190604 Hyun gong except txData : delete
     except:
         try:
             for i in txRawData[count]:
@@ -251,13 +246,15 @@ def writeTx(txRawData):
         except:
             return 0
     return 1
-    print('txData written to txData.csv.')
-
+    print('txData written to DB')
 
 def readTx(txTablePath):
     print("readTx")
     try:
         importedTx = selectTable(txTablePath)
+
+        # 20190604 Hyun Gong sort : txData fee
+        # It brings something that is not mined(commityn==0 means not mined block)
         importedTx = importedTx[importedTx.commityn == 0].sort_values(['fee', 'txtime'], ascending = [False, False]).reset_index(drop=True)
         print(len(importedTx))
         print("Pulling txData from db...")
@@ -273,17 +270,21 @@ def readPagingTx(g_txTableName, count):
         return 0
     try:
         importedTx = selectTable(g_txTableName)
+
+        # 20190604 Hyun Gong sort : txData fee
+        # Columns output of only necessary lines from the table
         importedTx = importedTx[importedTx.commityn == 0].sort_values(['fee', 'txtime'], ascending = [False, False]).reset_index(drop=True)
         importedTx = importedTx.iloc[0:int(count), :]
+
         print("Pulling blockchain from db...")
         return importedTx
     except:
         return 0
 
-
 def getTxData():
     strTxData = ''
     importedTx = readTx(g_txTableName)
+
     if len(importedTx) > 0:
         for i in range(len(importedTx)):
             transaction = "[" + importedTx.uuid[i] + "]" "UserID " + importedTx.sender[i] + " sent " + str(importedTx.amount[i]) + " bitTokens to UserID " + importedTx.receiver[i] + " fee: " + str(importedTx.fee[i]) + "message: " + importedTx.message[i] + ", time : " + importedTx.txtime[i]  #
@@ -295,6 +296,7 @@ def getTxData():
 def getCountedTxData(count):
     strTxData = ''
     importedTx = readPagingTx(g_txTableName, int(count))
+
     if type(importedTx) != int:
         if len(importedTx) > 0:
             for i in range(len(importedTx)):
@@ -303,6 +305,9 @@ def getCountedTxData(count):
                 strTxData += transaction
 
     return strTxData
+
+# 20190604 Hyun Gong getFee in Block
+# Add as much fee as you want
 
 def getCountedFeeData(count):
     temp = 0
@@ -313,6 +318,8 @@ def getCountedFeeData(count):
                 temp += importedTx.fee[i]
     return temp
 
+# 20190604 Hyun Gong getFee in Block
+# add up all the fees
 def getFeeData():
     temp = 0
     importedTx = readTx(g_txTableName).reset_index(drop=True)
@@ -320,7 +327,6 @@ def getFeeData():
         for i in range(len(importedTx)):
             temp += importedTx.fee[i]
     return temp
-
 
 def mineNewBlock(difficulty=g_difficulty, blockchainPath=g_bcTableName):
     blockchain = readBlockchain(blockchainPath)
@@ -394,7 +400,6 @@ def mine():
 def mineCounted(count):
     mineCountedNewBlock(count)
 
-
 def isSameBlock(block1, block2):
     if str(block1.index) != str(block2.index):
         return False
@@ -414,7 +419,6 @@ def isSameBlock(block1, block2):
         return False
     return True
 
-
 def isValidNewBlock(newBlock, previousBlock):
     if int(previousBlock.index) + 1 != int(newBlock.index):
         print('Indices Do Not Match Up')
@@ -429,8 +433,7 @@ def isValidNewBlock(newBlock, previousBlock):
         print("Hash difficulty is invalid")
         return False
     return True
-
-
+# 20190604 Hyun Gong The part that creates the new txdata
 def newtx(txToMining):
     newtxData = []
     # transform given data to txData object
@@ -449,46 +452,45 @@ def newtx(txToMining):
         return -2
     return 1
 
-
-def isValidChain(bcToValidate):
-    genesisBlock = []
-    bcToValidateForBlock = []
-
-    # Read GenesisBlock
-    try:
-        with open(g_bcFileName, 'r', newline='') as file:
-            blockReader = csv.reader(file)
-            for line in blockReader:
-                block = Block(line[0], line[1], line[2], line[3], line[4], line[5], line[6], line[7])
-                genesisBlock.append(block)
-    #                break
-    except:
-        print("file open error in isValidChain")
-        return False
-
-    # transform given data to Block object
-    for line in bcToValidate:
-        # print(type(line))
-        # index, previousHash, timestamp, data, currentHash, proof
-        block = Block(line['index'], line['previousHash'], line['timestamp'], line['data'], line['currentHash'],
-                      line['proof'], line['fee'], line['signature'])
-        bcToValidateForBlock.append(block)
-
-    # if it fails to read block data  from db(csv)
-    if not genesisBlock:
-        print("fail to read genesisBlock")
-        return False
-
-    # compare the given data with genesisBlock
-    if not isSameBlock(bcToValidateForBlock[0], genesisBlock[0]):
-        print('Genesis Block Incorrect')
-        return False
-
-    for i in range(0, len(bcToValidateForBlock)):
-        if isSameBlock(genesisBlock[i], bcToValidateForBlock[i]) == False:
-            return False
-
-    return True
+# def isValidChain(bcToValidate):
+#     genesisBlock = []
+#     bcToValidateForBlock = []
+#
+#     # Read GenesisBlock
+#     try:
+#         with open(g_bcFileName, 'r', newline='') as file:
+#             blockReader = csv.reader(file)
+#             for line in blockReader:
+#                 block = Block(line[0], line[1], line[2], line[3], line[4], line[5], line[6], line[7])
+#                 genesisBlock.append(block)
+#     #                break
+#     except:
+#         print("file open error in isValidChain")
+#         return False
+#
+#     # transform given data to Block object
+#     for line in bcToValidate:
+#         # print(type(line))
+#         # index, previousHash, timestamp, data, currentHash, proof
+#         block = Block(line['index'], line['previousHash'], line['timestamp'], line['data'], line['currentHash'],
+#                       line['proof'], line['fee'], line['signature'])
+#         bcToValidateForBlock.append(block)
+#
+#     # if it fails to read block data  from db(csv)
+#     if not genesisBlock:
+#         print("fail to read genesisBlock")
+#         return False
+#
+#     # compare the given data with genesisBlock
+#     if not isSameBlock(bcToValidateForBlock[0], genesisBlock[0]):
+#         print('Genesis Block Incorrect')
+#         return False
+#
+#     for i in range(0, len(bcToValidateForBlock)):
+#         if isSameBlock(genesisBlock[i], bcToValidateForBlock[i]) == False:
+#             return False
+#
+#     return True
 
 def addNode(queryStr):
     inputNodeIp = queryStr[0]
@@ -496,6 +498,8 @@ def addNode(queryStr):
 
     importedNodeList = selectTable(g_nodelistTableName)
 
+    # 20190604 Hyun Gong check nodeIP, nodePort
+    # Check that the node in the table and the input node are the same
     try:
         if len(importedNodeList) == 0:
             insertNodelist(inputNodeIp, inputNodePort)
@@ -511,9 +515,6 @@ def addNode(queryStr):
 
     print('new node written to DB')
 
-
-
-
 def readNodes(g_nodelstTableName):
     print("read Nodes")
 
@@ -522,9 +523,6 @@ def readNodes(g_nodelstTableName):
         return importedNodeList
     except:
         return None
-
-
-
 
 # def broadcastNewBlock(blockchain):
 #     # newBlock  = getLatestBlock(blockchain) # get the latest block
@@ -572,11 +570,9 @@ def readNodes(g_nodelstTableName):
 #                 except:
 #                     print("caught exception while updating node list")
 
-
 def row_count(tableName):
     table = selectTable(tableName)
     return len(table)
-
 
 def compareMerge(bcDict):
     heldBlock = []
@@ -590,13 +586,12 @@ def compareMerge(bcDict):
             block = Block(blockReader.no[i], blockReader.previoushash[i], blockReader.timestamp[i], blockReader.data[i], blockReader.currenthash[i], blockReader.proof[i], blockReader.fee[i], blockReader.signature[i])
             heldBlock.append(block)
 
-
     except:
         print("file open error in compareMerge or No database exists")
         print("call initSvr if this server has just installed")
         return -1
 
-    # if it fails to read block data  from db(csv)
+    # if it fails to read block data from db
     if len(heldBlock) == 0:
         print("fail to read")
         return -2
@@ -614,7 +609,6 @@ def compareMerge(bcDict):
         return -1
 
     # check if broadcasted new block,1 ahead than > last held block
-
     if isValidNewBlock(bcToValidateForBlock[-1], heldBlock[-1]) == False:
 
         # latest block == broadcasted last block
@@ -633,22 +627,18 @@ def compareMerge(bcDict):
                     tempBlocks.append(bcToValidateForBlock[i])
                 else:
                     return -1
-            # [START] save it to csv
-            tempBlockchain = pd.DataFrame()
-            tempBlockchain.columns = ['index', 'previoushash', 'timestamp', 'data', 'currenthash', 'proof', 'fee', 'signature']
-            for block in bcToValidateForBlock:
-                blockList = [block.index, block.previousHash, str(block.timestamp), block.data,
-                             block.currentHash, block.proof, block.fee, block.signature]
-                tempBlockchain.loc[len(tempBlockchain)] = blockList
-            tempBlockchain.to_sql(g_bcTableName, engine, if_exists='replace', index=False)
-            # [END] save it to csv
+
+            # 20190604 Hyun Gong need Trouble Shooting......
+            # tempBlockchain = pd.DataFrame()
+            # tempBlockchain.columns = ['index', 'previoushash', 'timestamp', 'data', 'currenthash', 'proof', 'fee', 'signature']
+            # for block in bcToValidateForBlock:
+            #     blockList = [block.index, block.previousHash, str(block.timestamp), block.data,
+            #                  block.currentHash, block.proof, block.fee, block.signature]
+            #     tempBlockchain.loc[len(tempBlockchain)] = blockList
+            # tempBlockchain.to_sql(g_bcTableName, engine, if_exists='replace', index=False)
+
             return 1
         elif len(bcToValidateForBlock) < len(heldBlock):
-            # validation
-            # for i in range(0,len(bcToValidateForBlock)):
-            #    if isSameBlock(heldBlock[i], bcToValidateForBlock[i]) == False:
-            #        print("Block Information Incorrect #1")
-            #        return -1
             tempBlocks = [bcToValidateForBlock[0]]
             for i in range(1, len(bcToValidateForBlock)):
                 if isValidNewBlock(bcToValidateForBlock[i], tempBlocks[i - 1]):
@@ -676,7 +666,7 @@ def compareMerge(bcDict):
             if isSameBlock(heldBlock[i], bcToValidateForBlock[i]) == False:
                 print("Block Information Incorrect #1")
                 return -1
-        # [START] save it to csv
+        # [START] save it to DB
         tempBlockchain = pd.DataFrame()
         tempBlockchain.columns = ['index', 'previoushash', 'timestamp', 'data', 'currenthash', 'proof', 'fee',
                                   'signature']
@@ -685,9 +675,8 @@ def compareMerge(bcDict):
                          block.currentHash, block.proof, block.fee, block.signature]
             tempBlockchain.loc[len(tempBlockchain)] = blockList
         tempBlockchain.to_sql(g_bcTableName, engine, if_exists='replace', index=False)
-        # [END] save it to csv
+        # [END] save it to DB
         return 1
-
 
 def initSvr():
     print("init Server")
@@ -723,20 +712,20 @@ def initSvr():
                 print(res.text)
                 tmpbcData = json.loads(res.text)
                 for line in tmpbcData:
-                    # print(type(line))
-                    # index, previousHash, timestamp, data, currentHash, proof
                     block = [line['index'], line['previousHash'], line['timestamp'], line['data'], line['currentHash'],
                              line['proof'], line['fee'], line['signature']]
                     blockchainList.append(block)
                 try:
+                    # 20190604 Hyun Gong The part that reads all blockchain data is read.
+                    # Compare blocks with other nodes
                     table = selectTable(g_bcTableName)
+                    print(type(table))
                     for i in range(len(blockchainList)):
                         table.loc[len(table)] = blockchainList[i]
                 except Exception as e:
                     print("file write error in initSvr() " + e)
 
     return 1
-
 
 # This class will handle any incoming request from
 # a browser
@@ -757,6 +746,8 @@ class myHandler(BaseHTTPRequestHandler):
                 # TODO: range return (~/block/getBlockData?from=1&to=300)
                 queryString = urlparse(self.path).query.split('?')[-1].split('&')
                 print(queryString)
+
+                # 20190604 Hyun Gong the part that determines how many blocks to load.
                 if len(queryString) > 1:
                     try:
                         queryStringFrom = int(queryString[0].split('=')[1])
@@ -792,6 +783,7 @@ class myHandler(BaseHTTPRequestHandler):
             elif None != re.search('/block/generateBlock', self.path): # OK
                 queryString = urlparse(self.path).query.split('count=')
 
+                # 20190604 Hyun Gong The part that determines how many blocks to create.
                 if queryString[-1] == "":
                     t = threading.Thread(target=mine)
                     t.start()
@@ -814,6 +806,8 @@ class myHandler(BaseHTTPRequestHandler):
             # TODO: range return (~/block/getBlockData?from=1&to=300)
             queryString = urlparse(self.path).query.split('?')
             print(queryString)
+
+            # 20190604 Hyun Gong Bring as many txdata as you want
             if queryString[0].count('count') > 0:
                 try:
                     count = queryString[0].split('=')[-1]
@@ -824,6 +818,7 @@ class myHandler(BaseHTTPRequestHandler):
             else:
                 txdata = readTx(g_txTableName)  # DataFrame
 
+            # 20190604 Hyun Gong When there is no txdata
             if type(txdata) == int:
                 print("No txData Exists")
                 data.append("no txData exists")
@@ -834,6 +829,8 @@ class myHandler(BaseHTTPRequestHandler):
                 elif len(txdata) == 0:
                     print("No txData Exists")
                     data.append("no txData exists")
+
+                # 20190604 Hyun Gong txdata to Dictionary
                 else:
                     for i in range(len(txdata)):
                         Dict = {'commitYN': str(txdata.commityn[i]), 'sender': txdata.sender[i],
@@ -846,7 +843,6 @@ class myHandler(BaseHTTPRequestHandler):
 
             self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
 
-
         elif None != re.search('/node/*', self.path):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -854,8 +850,6 @@ class myHandler(BaseHTTPRequestHandler):
             if None != re.search('/node/addNode', self.path):
                 queryStr = urlparse(self.path).query.split(':')
                 print("client ip : " + self.client_address[0] + " query ip : " + queryStr[0])
-                # if self.client_address[0] != queryStr[0]:
-                #     data.append("your ip address doesn't match with the requested parameter")
 
                 res = addNode(queryStr)
                 if res == 1:
@@ -884,7 +878,6 @@ class myHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
 
-
         if None != re.search('/block/*', self.path):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -892,23 +885,23 @@ class myHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Credentials", "true")
             self.end_headers()
 
-            if None != re.search('/block/validateBlock/*', self.path):
-                ctype, pdict = cgi.parse_header(self.headers['content-type'])
-                # print(ctype) #print(pdict)
-
-                if ctype == 'application/json':
-                    content_length = int(self.headers['Content-Length'])
-                    post_data = self.rfile.read(content_length)
-                    receivedData = post_data.decode('utf-8')
-                    print(type(receivedData))
-                    tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
-                    if isValidChain(tempDict) == True:
-                        tempDict.append("validationResult:normal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("validationResult:abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-            elif None != re.search('/block/newtx', self.path): # Doing
+            # if None != re.search('/block/validateBlock/*', self.path):
+            #     ctype, pdict = cgi.parse_header(self.headers['content-type'])
+            #     # print(ctype) #print(pdict)
+            #
+            #     if ctype == 'application/json':
+            #         content_length = int(self.headers['Content-Length'])
+            #         post_data = self.rfile.read(content_length)
+            #         receivedData = post_data.decode('utf-8')
+            #         print(type(receivedData))
+            #         tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
+            #         if isValidChain(tempDict) == True:
+            #             tempDict.append("validationResult:normal")
+            #             self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+            #         else:
+            #             tempDict.append("validationResult:abnormal")
+            #             self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+            if None != re.search('/block/newtx', self.path): # Doing
                 ctype, pdict = cgi.parse_header(self.headers['content-type'])
                 if ctype == 'application/json':
                     content_length = int(self.headers['Content-Length'])
@@ -958,95 +951,9 @@ class myHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
         return
-
-    def do_OPTIONS(self):
-        self.send_response(200, "ok")
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header("Access-Control-Allow-Headers", "X-Requested-With")
-        self.send_header("Access-Control-Allow-Credentials", "true")
-        self.headers['Content-Type'] = 'application/json'
-        self.headers['Content-Length'] = '10'
-
-
-        if None != re.search('/block/*', self.path):
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-
-            if None != re.search('/block/validateBlock/*', self.path):
-                ctype, pdict = cgi.parse_header(self.headers['content-type'])
-                # print(ctype) #print(pdict)
-
-                if ctype == 'application/json':
-                    content_length = int(self.headers['Content-Length'])
-                    post_data = self.rfile.read(content_length)
-                    receivedData = post_data.decode('utf-8')
-                    print(type(receivedData))
-                    tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
-                    if isValidChain(tempDict) == True:
-                        tempDict.append("validationResult:normal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("validationResult:abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-            elif None != re.search('/block/newtx', self.path): # Doing
-                ctype, pdict = cgi.parse_header(self.headers['content-type'])
-                if ctype == 'application/json':
-
-                    content_length = int(self.headers['Content-Length'])
-                    post_data = self.rfile.read(content_length)
-                    receivedData = post_data.decode('utf-8')
-                    print(type(receivedData))
-                    tempDict = json.loads(receivedData)
-                    res = newtx(tempDict)
-                    if res == 1:
-                        tempDict.append("accepted : it will be mined later")
-                        print(tempDict)
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -1:
-                        tempDict.append("declined : number of request txData exceeds limitation")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -2:
-                        tempDict.append("declined : error on data read or write")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("error : requested data is abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-
-        elif None != re.search('/node/*', self.path):
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            if None != re.search(g_receiveNewBlock, self.path):  # /node/receiveNewBlock
-                content_length = int(self.headers['Content-Length'])
-                post_data = self.rfile.read(content_length)
-                receivedData = post_data.decode('utf-8')
-                tempDict = json.loads(receivedData)  # load your str into a list
-                print(tempDict)
-                res = compareMerge(tempDict)
-                if res == -1:  # internal error
-                    tempDict.append("internal server error")
-                elif res == -2:  # block chain info incorrect
-                    tempDict.append("block chain info incorrect")
-                elif res == 1:  # normal
-                    tempDict.append("accepted")
-                elif res == 2:  # identical
-                    tempDict.append("already updated")
-                elif res == 3:  # we have a longer chain
-                    tempDict.append("we have a longer chain")
-                self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-        else:
-            self.send_response(404)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-
-        return
-
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Handle requests in a separate thread."""
-
 
 try:
 
@@ -1056,6 +963,7 @@ try:
     server = ThreadedHTTPServer(('', PORT_NUMBER), myHandler)
     print('Started httpserver on port ', PORT_NUMBER)
     initSvr()
+    # 20190604 Hyun Gong Automated mining every 10 minutes
     execute_func(600.0)
     # Wait forever for incoming http requests
     server.serve_forever()
